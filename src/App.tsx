@@ -156,55 +156,91 @@ export default function App() {
     setDetectedData(null);
 
     try {
-      // Bước 1: Upload ảnh (giả lập)
+      // --- BƯỚC 1: Upload & AI (Giả lập) ---
       setAnalysisStep('Đang tải ảnh lên hệ thống...');
       await new Promise(r => setTimeout(r, 800));
 
-      // Bước 2: AI quét ảnh
       setAnalysisStep('AI đang phân tích sự cố...');
       const aiResult = await simulateAIAnalysis();
       
-      // Bước 3: Lấy toạ độ GPS THẬT
-      setAnalysisStep('Đang định vị GPS...');
+      // --- BƯỚC 2: Kiểm tra & Xin Quyền App ---
+      setAnalysisStep('Đang kiểm tra quyền truy cập...');
       
-      // Kiểm tra quyền truy cập
-      const permissions = await Geolocation.checkPermissions();
-      if (permissions.location === 'denied') {
-         alert("Vui lòng cấp quyền vị trí để sử dụng tính năng này.");
-         setIsAnalyzing(false);
-         return;
+      // Check quyền hiện tại
+      let permissionStatus = await Geolocation.checkPermissions();
+      
+      // Nếu chưa được cấp quyền hoặc đang ở trạng thái "prompt" -> Xin quyền
+      if (permissionStatus.location === 'prompt' || permissionStatus.location === 'prompt-with-rationale') {
+        permissionStatus = await Geolocation.requestPermissions();
       }
 
-      // Lấy toạ độ hiện tại
-      const position = await Geolocation.getCurrentPosition({
-        enableHighAccuracy: true, // Lấy chính xác cao (dùng GPS)
-        timeout: 10000,           // Timeout sau 10s
-      });
+      // Nếu người dùng từ chối hẳn
+      if (permissionStatus.location === 'denied') {
+        throw new Error("PERMISSION_DENIED");
+      }
 
-      const { latitude, longitude } = position.coords;
+      // --- BƯỚC 3: Lấy toạ độ (Xử lý máy tắt GPS) ---
+      setAnalysisStep('Đang định vị GPS...');
       
-      // Bước 4: Đổi toạ độ sang tên đường (Reverse Geocoding)
+      let position;
+      try {
+        position = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true, // Cố gắng dùng GPS chip để chính xác nhất
+          timeout: 5000,            // Chờ tối đa 5s
+          maximumAge: 0             // Không dùng toạ độ cũ lưu trong cache
+        });
+      } catch (geoError: any) {
+        // Bắt lỗi riêng cho việc lấy vị trí
+        console.log("Geo Error:", geoError);
+        
+        // Lỗi này thường xuất hiện khi tắt GPS trên Android: "location disabled"
+        if (geoError.message.includes("location disabled") || geoError.message.includes("Location services are not enabled")) {
+          throw new Error("GPS_OFF"); 
+        }
+        
+        // Lỗi timeout (đứng trong nhà kín/hầm)
+        throw new Error("TIMEOUT");
+      }
+
+      // --- BƯỚC 4: Reverse Geocoding ---
+      const { latitude, longitude } = position.coords;
       setAnalysisStep('Đang xác thực địa chỉ...');
       const realAddress = await getAddressFromCoordinates(latitude, longitude);
 
-      // Hoàn tất
+      // --- HOÀN TẤT ---
       setDetectedData({
         category: aiResult.category,
         address: realAddress
       });
       
-    } catch (error) {
+    } catch (error: any) {
       console.error("Lỗi quy trình:", error);
-      alert("Không thể lấy vị trí. Vui lòng kiểm tra GPS.");
-      // Fallback nếu lỗi: dùng toạ độ giả hoặc thông báo lỗi
-      setDetectedData({
-         category: MOCK_CATEGORIES[0],
-         address: "Không xác định được vị trí"
-      });
+      
+      // Xử lý thông báo lỗi thân thiện với người dùng
+      if (error.message === "PERMISSION_DENIED") {
+        alert("Ứng dụng cần quyền Vị trí để hoạt động. Vui lòng vào Cài đặt > Ứng dụng để cấp quyền.");
+      } 
+      else if (error.message === "GPS_OFF") {
+        // Đây là chỗ quan trọng bạn cần:
+        alert("Vị trí (GPS) đang tắt. Vui lòng kéo thanh thông báo xuống, bật 'Vị trí' và thử lại nhé!");
+      } 
+      else if (error.message === "TIMEOUT") {
+        alert("Không tìm thấy tín hiệu GPS. Bạn có đang ở trong nhà không? Hãy thử di chuyển ra ngoài trời.");
+        // Fallback: Trả về vị trí tương đối hoặc cho phép nhập tay (tuỳ logic bạn chọn)
+        // Ở đây mình để fallback về mock để demo không bị tắc
+        setDetectedData({
+           category: MOCK_CATEGORIES[0],
+           address: "Không xác định được vị trí (Mất tín hiệu)"
+        });
+      }
+      else {
+        alert("Có lỗi xảy ra: " + error.message);
+      }
+
     } finally {
       setIsAnalyzing(false);
     }
-  };  // Xử lý gửi báo cáo cuối cùng
+  };  
 
   const handleSubmitReport = () => {
     if (!detectedData || !imagePreview) return;
