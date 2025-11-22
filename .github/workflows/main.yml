@@ -1,0 +1,53 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main # Hoặc 'master' tùy nhánh chính của bạn
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Lấy code về
+      - name: Checkout source
+        uses: actions/checkout@v3
+
+      # 2. Cài đặt Node.js & Java (Môi trường build)
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+      
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 3. Cài đặt thư viện & Build Web Assets
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build Web
+        run: npm run build
+
+      # 4. Đồng bộ code vào thư mục Android
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # 5. Cấp quyền & Build APK (Debug)
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 6. Đẩy file APK ra ngoài để tải về
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: urban-feedback-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
